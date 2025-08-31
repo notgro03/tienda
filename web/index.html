@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Buscador por Voz</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      background: #f6f6f6;
+      margin: 0;
+    }
+    #container {
+      max-width: 600px;
+      width: 100%;
+      padding: 20px;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+      border-radius: 8px;
+      background: #fff;
+      text-align: center;
+    }
+    button {
+      background: #0070f3;
+      color: white;
+      border: none;
+      padding: 10px 20px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 16px;
+      margin-top: 10px;
+    }
+    button:active {
+      background: #005dc1;
+    }
+    #transcript {
+      margin-top: 20px;
+      font-size: 18px;
+      min-height: 40px;
+      border-bottom: 1px solid #ddd;
+      padding-bottom: 10px;
+    }
+    #answer {
+      margin-top: 10px;
+      font-size: 18px;
+      min-height: 60px;
+    }
+    #speakBtn {
+      margin-top: 10px;
+    }
+  </style>
+</head>
+<body>
+  <div id="container">
+    <h1>Buscador por Voz</h1>
+    <p>Mantené presionado para hablar y soltar para enviar la consulta.</p>
+    <button id="talkBtn">Mantené para hablar</button>
+    <div id="transcript"></div>
+    <div id="answer"></div>
+    <button id="speakBtn" style="display:none;">🔊 Escuchar respuesta</button>
+  </div>
+
+  <script>
+    const talkBtn = document.getElementById('talkBtn');
+    const transcriptEl = document.getElementById('transcript');
+    const answerEl = document.getElementById('answer');
+    const speakBtn = document.getElementById('speakBtn');
+
+    let mediaRecorder;
+    let audioChunks = [];
+    let recognition;
+    let useWebSpeech = false;
+
+    function initWebSpeech() {
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!SpeechRecognition) return false;
+      recognition = new SpeechRecognition();
+      recognition.interimResults = true;
+      recognition.lang = 'es-ES';
+      recognition.onresult = (e) => {
+        const text = Array.from(e.results).map(r => r[0].transcript).join('');
+        transcriptEl.textContent = text;
+      };
+      recognition.onend = () => {
+        const text = transcriptEl.textContent.trim();
+        if (text) {
+          sendQuery(text);
+        }
+      };
+      return true;
+    }
+
+    function startWebSpeech() {
+      if (recognition) recognition.start();
+    }
+
+    function stopWebSpeech() {
+      if (recognition) recognition.stop();
+    }
+
+    async function startRecording() {
+      audioChunks = [];
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaRecorder = new MediaRecorder(stream);
+      mediaRecorder.ondataavailable = (e) => audioChunks.push(e.data);
+      mediaRecorder.start();
+    }
+
+    async function stopRecording() {
+      if (!mediaRecorder) return;
+      return new Promise((resolve) => {
+        mediaRecorder.onstop = async () => {
+          const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+          const formData = new FormData();
+          formData.append('audio', audioBlob, 'recording.webm');
+          const response = await fetch('/api/transcribe', { method: 'POST', body: formData });
+          const data = await response.json();
+          const text = data.text || '';
+          transcriptEl.textContent = text;
+          if (text) {
+            sendQuery(text);
+          }
+          resolve();
+        };
+        mediaRecorder.stop();
+      });
+    }
+
+    async function sendQuery(text) {
+      answerEl.textContent = 'Buscando...';
+      speakBtn.style.display = 'none';
+      try {
+        const response = await fetch('/api/answer', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query: text })
+        });
+        const data = await response.json();
+        answerEl.textContent = data.answer || 'Sin respuesta';
+        if (data.answer) {
+          speakBtn.style.display = '';
+        }
+      } catch (err) {
+        answerEl.textContent = 'Error al obtener la respuesta';
+      }
+    }
+
+    speakBtn.addEventListener('click', () => {
+      const utter = new SpeechSynthesisUtterance(answerEl.textContent);
+      utter.lang = 'es-ES';
+      speechSynthesis.speak(utter);
+    });
+
+    talkBtn.addEventListener('pointerdown', async () => {
+      transcriptEl.textContent = '';
+      answerEl.textContent = '';
+      speakBtn.style.display = 'none';
+      if (useWebSpeech) {
+        startWebSpeech();
+      } else {
+        await startRecording();
+      }
+    });
+
+    talkBtn.addEventListener('pointerup', async () => {
+      if (useWebSpeech) {
+        stopWebSpeech();
+      } else {
+        await stopRecording();
+      }
+    });
+
+    useWebSpeech = initWebSpeech();
+    if (!useWebSpeech) {
+      console.log('No se soporta Web Speech API, usando grabación de audio.');
+    }
+  </script>
+</body>
+</html>
